@@ -1,0 +1,159 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract DataflowManagement is Ownable {
+    // Struct for Data Stream
+    struct DataStream {
+        uint256 id;
+        string source; // e.g., "Sensor_123", "Weather_Station_NY"
+        string dataType; // e.g., "Temperature", "Transaction_Log"
+        string dataHash; // IPFS hash for detailed data (e.g., JSON with raw data)
+        address recordedBy; // Data provider
+        uint256 timestamp; // Unix timestamp
+        bool isActive; // Status of the data stream
+    }
+
+    // Struct for Authorized Provider
+    struct Provider {
+        address providerAddress;
+        string name; // e.g., "IoT Corp", "Research Lab"
+        bool isAuthorized;
+    }
+
+    // Counters
+    uint256 private nextStreamId = 1;
+
+    // Mappings
+    mapping(uint256 => DataStream) public dataStreams; // Stream ID to details
+    mapping(address => Provider) public providers; // Authorized providers
+    mapping(address => uint256[]) public providerStreams; // Provider to list of stream IDs
+
+    // Events
+    event ProviderAuthorized(address indexed provider, string name);
+    event ProviderRevoked(address indexed provider);
+    event DataStreamRecorded(
+        uint256 indexed streamId,
+        string source,
+        string dataType,
+        string dataHash,
+        address recordedBy,
+        uint256 timestamp
+    );
+    event DataStreamUpdated(uint256 indexed streamId, string dataHash);
+    event DataStreamDeactivated(uint256 indexed streamId);
+
+    constructor() Ownable(msg.sender) {}
+
+    // Modifier to restrict access to authorized providers
+    modifier onlyAuthorizedProvider() {
+        require(providers[msg.sender].isAuthorized, "Not authorized provider");
+        _;
+    }
+
+    // Authorize a data provider (e.g., IoT device, research institution)
+    function authorizeProvider(address provider, string memory name) external onlyOwner {
+        require(provider != address(0), "Invalid address");
+        require(bytes(name).length > 0, "Name cannot be empty");
+        require(!providers[provider].isAuthorized, "Provider already authorized");
+
+        providers[provider] = Provider(provider, name, true);
+        emit ProviderAuthorized(provider, name);
+    }
+
+    // Revoke a provider's authorization
+    function revokeProvider(address provider) external onlyOwner {
+        require(providers[provider].isAuthorized, "Provider not authorized");
+        providers[provider].isAuthorized = false;
+        emit ProviderRevoked(provider);
+    }
+
+    // Record a new data stream
+    function recordDataStream(
+        string memory source,
+        string memory dataType,
+        string memory dataHash
+    ) external onlyAuthorizedProvider returns (uint256) {
+        require(bytes(source).length > 0, "Source cannot be empty");
+        require(bytes(dataType).length > 0, "Data type cannot be empty");
+        require(bytes(dataHash).length > 0, "Data hash cannot be empty");
+
+        uint256 streamId = nextStreamId++;
+        dataStreams[streamId] = DataStream(
+            streamId,
+            source,
+            dataType,
+            dataHash,
+            msg.sender,
+            block.timestamp,
+            true
+        );
+        providerStreams[msg.sender].push(streamId);
+
+        emit DataStreamRecorded(streamId, source, dataType, dataHash, msg.sender, block.timestamp);
+        return streamId;
+    }
+
+    // Update a data stream's data hash (e.g., for new data batch)
+    function updateDataStream(uint256 streamId, string memory newDataHash) external onlyAuthorizedProvider {
+        require(dataStreams[streamId].isActive, "Data stream not active");
+        require(dataStreams[streamId].recordedBy == msg.sender, "Not recorded by this provider");
+        require(bytes(newDataHash).length > 0, "Data hash cannot be empty");
+
+        dataStreams[streamId].dataHash = newDataHash;
+        dataStreams[streamId].timestamp = block.timestamp;
+        emit DataStreamUpdated(streamId, newDataHash);
+    }
+
+    // Deactivate a data stream
+    function deactivateDataStream(uint256 streamId) external {
+        require(dataStreams[streamId].isActive, "Data stream not active");
+        require(
+            dataStreams[streamId].recordedBy == msg.sender || owner() == msg.sender,
+            "Not authorized"
+        );
+        dataStreams[streamId].isActive = false;
+        emit DataStreamDeactivated(streamId);
+    }
+
+    // Get data stream details
+    function getDataStream(uint256 streamId)
+        external
+        view
+        returns (
+            string memory source,
+            string memory dataType,
+            string memory dataHash,
+            address recordedBy,
+            uint256 timestamp,
+            bool isActive
+        )
+    {
+        require(dataStreams[streamId].id != 0, "Data stream does not exist");
+        DataStream memory stream = dataStreams[streamId];
+        return (
+            stream.source,
+            stream.dataType,
+            stream.dataHash,
+            stream.recordedBy,
+            stream.timestamp,
+            stream.isActive
+        );
+    }
+
+    // Get data streams recorded by a provider
+    function getProviderStreams(address provider) external view returns (uint256[] memory) {
+        return providerStreams[provider];
+    }
+
+    // Get provider details
+    function getProvider(address provider)
+        external
+        view
+        returns (string memory name, bool isAuthorized)
+    {
+        Provider memory p = providers[provider];
+        return (p.name, p.isAuthorized);
+    }
+}
